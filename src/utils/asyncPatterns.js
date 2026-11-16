@@ -16,11 +16,40 @@
  * @param {number} maxRetries - Maximum number of retry attempts
  * @returns {Promise<Response>} - The fetch response
  */
-export async function fetchWithRetry(url, options = {}, maxRetries = 3) {
+
   // TODO: Implement retry logic with exponential backoff
   // For now, just do a basic fetch
-  return fetch(url, options);
-}
+  export async function fetchWithRetry(url, options = {}, maxRetries = 3) {
+    const { timeout = 5000, ...fetchOptions } = options;
+  
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      // A fresh AbortController per attempt: it cancels the fetch if it takes too long
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeout);
+  
+      try {
+        const response = await fetch(url, { ...fetchOptions, signal: controller.signal });
+  
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+  
+        return response;
+      } catch (error) {
+        if (attempt === maxRetries) {
+          console.error(`Failed after ${maxRetries + 1} attempts: ${url}`);
+          throw error;
+        }
+  
+        // Exponential backoff: 1s, 2s, 4s
+        const delay = Math.pow(2, attempt) * 1000;
+        console.log(`Retry attempt ${attempt + 1} after ${delay}ms: ${url}`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    }
+  }
 
 /**
  * TODO: Implement RequestCache class
@@ -30,24 +59,38 @@ export async function fetchWithRetry(url, options = {}, maxRetries = 3) {
  * 2. Automatically expire entries after TTL
  * 3. Provide get, set, and clear methods
  */
-class RequestCache {
-  constructor(ttl = 60000) {
+
     // TODO: Initialize cache storage and TTL
-  }
-
-  set(key, value) {
-    // TODO: Store value with timestamp
-  }
-
-  get(key) {
-    // TODO: Return value if not expired, null otherwise
-    return null;
-  }
-
-  clear() {
-    // TODO: Clear all cache entries
-  }
-}
+    class RequestCache {
+      constructor(ttl = 60000) {
+        this.cache = new Map();
+        this.ttl = ttl;
+      }
+    
+      set(key, value) {
+        this.cache.set(key, { value, timestamp: Date.now() });
+      }
+    
+      get(key) {
+        const entry = this.cache.get(key);
+        if (!entry) return null;
+    
+        const age = Date.now() - entry.timestamp;
+        if (age > this.ttl) {
+          this.cache.delete(key);
+          return null;
+        }
+    
+        return entry.value;
+      }
+    
+      clear() {
+        this.cache.clear();
+      }
+    }
+    
+    const cache = new RequestCache(15000);
+    
 
 /**
  * TODO: Implement cachedFetch
@@ -62,12 +105,37 @@ class RequestCache {
  * @param {object} options - Fetch options
  * @returns {Promise<any>} - Parsed JSON response
  */
+
 export async function cachedFetch(url, options = {}) {
+  const cached = cache.get(url);
+
+  if (cached) {
+    console.log('Cache hit:', url);
+    return { ...cached, cached: true };
+  }
+
+  if (pendingRequests.has(url)) {
+    console.log('Request deduped:', url);
+    return pendingRequests.get(url);
+  }
+
+  const requestPromise = fetchWithRetry(url, options)
+    .then(response => response.json())
+    .then(data => {
+      cache.set(url, data);
+      return data;
+    })
+    .finally(() => {
+      pendingRequests.delete(url);
+    });
+
+  pendingRequests.set(url, requestPromise);
+  return requestPromise;
+}
+
   // TODO: Implement caching and deduplication
   // For now, just do a basic fetch
-  const response = await fetch(url, options);
-  return response.json();
-}
+
 
 /**
  * TODO: Implement fetchWithTimeout

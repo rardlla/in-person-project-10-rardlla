@@ -13,29 +13,57 @@ import { useState, useCallback, useRef } from 'react';
  * @param {number} delay - Debounce delay in milliseconds
  * @returns {object} - { results, loading, error, search, cancel }
  */
+
 export function useSearch(searchFn, delay = 500) {
   const [results, setResults] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  // TODO: Add refs for abort controller and timeout
+  const abortControllerRef = useRef(null);
+  const timeoutRef = useRef(null);
 
-  const search = useCallback(async (query) => {
-    // TODO: Implement debounced search with cancellation
-    // For now, just call the search function directly
-    setLoading(true);
-    try {
-      const data = await searchFn(query);
-      setResults(data);
-    } catch (err) {
-      setError(err.message);
-    } finally {
+  const search = useCallback((query) => {
+    // Cancel the previous timer and request
+    clearTimeout(timeoutRef.current);
+    abortControllerRef.current?.abort();
+
+    if (!query) {
+      setResults(null);
       setLoading(false);
+      return;
     }
-  }, [searchFn]);
+
+    // Wait until typing pauses
+    timeoutRef.current = setTimeout(async () => {
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
+
+      setLoading(true);
+      setError(null);
+
+      try {
+        const data = await searchFn(query, controller.signal);
+
+        if (!controller.signal.aborted) {
+          setResults(data);
+        }
+      } catch (err) {
+        if (err.name !== 'AbortError') {
+          setError(err.message);
+          setResults(null);
+        }
+      } finally {
+        if (!controller.signal.aborted) {
+          setLoading(false);
+        }
+      }
+    }, delay);
+  }, [searchFn, delay]);
 
   const cancel = useCallback(() => {
-    // TODO: Implement cancellation
+    clearTimeout(timeoutRef.current);
+    abortControllerRef.current?.abort();
+    setLoading(false);
   }, []);
 
   return { results, loading, error, search, cancel };

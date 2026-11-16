@@ -1,26 +1,36 @@
-import { useEffect, useRef } from 'react';
 
-/**
- * TODO: Implement usePolling hook
- *
- * Requirements:
- * 1. Call the callback function at specified intervals
- * 2. Make an immediate first call when enabled
- * 3. Clean up intervals properly on unmount
- * 4. Provide a manual refresh function
- *
- * @param {Function} callback - Function to call at intervals
- * @param {number} interval - Polling interval in milliseconds
- * @param {boolean} enabled - Whether polling is enabled
- * @returns {object} - { refresh }
- */
+import { useEffect, useRef, useCallback } from 'react';
+
 export function usePolling(callback, interval = 30000, enabled = true) {
-  // TODO: Implement polling logic
+  const callbackRef = useRef(callback);
 
-  const refresh = () => {
-    // TODO: Manual refresh implementation
-    callback();
-  };
+  // Always use the latest callback
+  useEffect(() => {
+    callbackRef.current = callback;
+  }, [callback]);
+
+  // Manual refresh
+  const refresh = useCallback(() => {
+    return callbackRef.current();
+  }, []);
+
+  // Automatic polling
+  useEffect(() => {
+    if (!enabled) return;
+
+    // Make an immediate first call
+    refresh();
+
+    // Repeat at the specified interval
+    const intervalId = setInterval(() => {
+      refresh();
+    }, interval);
+
+    // Clean up when unmounted or settings change
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [interval, enabled, refresh]);
 
   return { refresh };
 }

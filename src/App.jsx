@@ -1,34 +1,31 @@
-import React, { useState, useEffect } from 'react';
+
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import WeatherCard from './components/WeatherCard';
 import ForecastCard from './components/ForecastCard';
 import NewsCard from './components/NewsCard';
 import AlertsCard from './components/AlertsCard';
 import SearchBar from './components/SearchBar';
 import StatusBar from './components/StatusBar';
-
-// PROBLEM: This basic fetch has no retry, no caching, no error handling
-async function basicFetch(url) {
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error('Network response was not ok');
-  }
-  return response.json();
-}
+import { fetchDashboardData } from './services/dashboardService';
+import { usePolling } from './hooks/usePolling';
 
 function App() {
   const [city, setCity] = useState('San Francisco');
+
   const [dashboardData, setDashboardData] = useState({
     weather: null,
     forecast: null,
     news: null,
     alerts: null
   });
+
   const [loading, setLoading] = useState({
     weather: false,
     forecast: false,
     news: false,
     alerts: false
   });
+
   const [errors, setErrors] = useState({
     weather: null,
     forecast: null,
@@ -36,67 +33,95 @@ function App() {
     alerts: null
   });
 
-  // PROBLEM: No error handling, no retry, no caching
-  const fetchWeatherData = async (cityName) => {
-    setLoading(prev => ({ ...prev, weather: true }));
-    setErrors(prev => ({ ...prev, weather: null }));
+  // Track active requests to avoid overlapping fetches
+  const activeRequests = useRef(new Set());
 
-    try {
-      const data = await basicFetch(`http://localhost:3001/weather?city=${cityName}`);
-      setDashboardData(prev => ({ ...prev, weather: data }));
-    } catch (error) {
-      setErrors(prev => ({ ...prev, weather: error.message }));
-      console.error('Weather fetch failed:', error);
-    } finally {
-      setLoading(prev => ({ ...prev, weather: false }));
-    }
-  };
+  // Track the latest selected city
+  const currentCityRef = useRef(city);
+  currentCityRef.current = city;
 
-  // PROBLEM: All requests are sequential, not parallel
-  const fetchAllData = async (cityName) => {
-    // Fetch weather
-    await fetchWeatherData(cityName);
-
-    // Fetch forecast
-    setLoading(prev => ({ ...prev, forecast: true }));
-    try {
-      const data = await basicFetch(`http://localhost:3001/forecast?city=${cityName}`);
-      setDashboardData(prev => ({ ...prev, forecast: data }));
-    } catch (error) {
-      setErrors(prev => ({ ...prev, forecast: error.message }));
-    } finally {
-      setLoading(prev => ({ ...prev, forecast: false }));
+  // Fetch dashboard data
+  const fetchAllData = useCallback(async (cityName) => {
+    // Prevent duplicate requests for the same city
+    if (activeRequests.current.has(cityName)) {
+      return;
     }
 
-    // Fetch news
-    setLoading(prev => ({ ...prev, news: true }));
-    try {
-      const data = await basicFetch(`http://localhost:3001/news?city=${cityName}`);
-      setDashboardData(prev => ({ ...prev, news: data }));
-    } catch (error) {
-      setErrors(prev => ({ ...prev, news: error.message }));
-    } finally {
-      setLoading(prev => ({ ...prev, news: false }));
-    }
+    activeRequests.current.add(cityName);
 
-    // Fetch alerts
-    setLoading(prev => ({ ...prev, alerts: true }));
+    setLoading({
+      weather: true,
+      forecast: true,
+      news: true,
+      alerts: true
+    });
+
     try {
-      const data = await basicFetch(`http://localhost:3001/alerts?city=${cityName}`);
-      setDashboardData(prev => ({ ...prev, alerts: data }));
+      const { data, errors: fetchErrors } =
+        await fetchDashboardData(cityName);
+
+      // Only update if this is still the selected city
+      if (currentCityRef.current === cityName) {
+        setDashboardData(prev => ({
+          ...prev,
+          ...data
+        }));
+
+        setErrors(fetchErrors);
+      }
     } catch (error) {
-      setErrors(prev => ({ ...prev, alerts: error.message }));
+      console.error('Dashboard fetch failed:', error);
+
+      if (currentCityRef.current === cityName) {
+        setErrors({
+          weather: error.message,
+          forecast: error.message,
+          news: error.message,
+          alerts: error.message
+        });
+      }
     } finally {
-      setLoading(prev => ({ ...prev, alerts: false }));
+      activeRequests.current.delete(cityName);
+
+      if (currentCityRef.current === cityName) {
+        setLoading({
+          weather: false,
+          forecast: false,
+          news: false,
+          alerts: false
+        });
+      }
     }
-  };
+  }, []);
+
+  // Poll automatically every 30 seconds
+  const { refresh } = usePolling(
+    () => fetchAllData(city),
+    30000,
+    true
+  );
+
+  // Fetch immediately when the selected city changes
+  // The polling hook handles the initial fetch
+  const previousCityRef = useRef(city);
 
   useEffect(() => {
-    fetchAllData(city);
-  }, [city]);
+    if (previousCityRef.current !== city) {
+      previousCityRef.current = city;
+
+      setDashboardData({
+        weather: null,
+        forecast: null,
+        news: null,
+        alerts: null
+      });
+
+      fetchAllData(city);
+    }
+  }, [city, fetchAllData]);
 
   const handleRefresh = () => {
-    fetchAllData(city);
+    refresh();
   };
 
   const handleCityChange = (newCity) => {
@@ -120,6 +145,7 @@ function App() {
 
       <div className="search-section">
         <SearchBar onCityChange={handleCityChange} />
+
         <button
           className="btn"
           onClick={handleRefresh}
@@ -135,16 +161,19 @@ function App() {
           loading={loading.weather}
           error={errors.weather}
         />
+
         <ForecastCard
           data={dashboardData.forecast}
           loading={loading.forecast}
           error={errors.forecast}
         />
+
         <NewsCard
           data={dashboardData.news}
           loading={loading.news}
           error={errors.news}
         />
+
         <AlertsCard
           data={dashboardData.alerts}
           loading={loading.alerts}
@@ -152,16 +181,16 @@ function App() {
         />
       </div>
 
-      {/* TODO: Add these features */}
       <div className="card" style={{ marginTop: '20px' }}>
-        <h2>Problems to Fix:</h2>
+        <h2>Implemented Features:</h2>
+
         <ul style={{ paddingLeft: '20px', color: '#666' }}>
-          <li>❌ No retry when requests fail (30% failure rate!)</li>
-          <li>❌ No caching (duplicate requests waste bandwidth)</li>
-          <li>❌ Sequential loading (should load in parallel)</li>
-          <li>❌ Race conditions in search (type fast and see wrong results)</li>
-          <li>❌ No request timeouts (can hang forever)</li>
-          <li>❌ No polling for updates</li>
+          <li>✅ Retry with exponential backoff</li>
+          <li>✅ Request caching and deduplication</li>
+          <li>✅ Parallel loading with Promise.allSettled</li>
+          <li>✅ Debounced city search and cancellation</li>
+          <li>✅ Request timeouts</li>
+          <li>✅ Automatic polling every 30 seconds</li>
         </ul>
       </div>
     </div>
